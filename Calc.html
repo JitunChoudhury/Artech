@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Price Calculator</title>
+    <link rel="stylesheet" href="Css/calc.css">
+    <link rel="stylesheet" href="Css/style.css">
+    <script src="Toast/toast.js" defer></script>
+    <link rel="stylesheet" href="Toast/toast.css">
+    <link rel="shortcut icon" href="Src/Logo.png" type="image/x-icon">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Quotation Calculator</h1>
+        <input type="file" id="fileInput" accept=".csv">
+        <div id="status"></div>
+        <div class="toast-container" id="toast-container"></div>
+        <div id="dataDisplay"></div>
+        <div id="totalPriceContainer"></div>
+        <div id="totalSqftContainer"></div>
+        <button id="downloadPdfBtn">Download PDF</button>
+        <button id="back">Back</button>
+    </div>
+    <script>
+        if (!localStorage.getItem('isLoggedIn')) {
+            window.location.href = 'login.html';
+        }
+
+        let processedData = [];
+        let totalSqft = 0;
+        let totalPrice = 0;
+        let itemSqftMap = { sheets: {}, laminates: {}, edgeBanding: {} };
+        let uniqueIndex = 0; // Unique index to prevent duplication
+        let uploadedFileName = ''; // To store the uploaded file name
+        let customerName = ''; // Variable to store the customer name
+
+        // Handle CSV file input
+        document.getElementById('fileInput').addEventListener('change', function () {
+            const file = this.files[0];
+            if (file) {
+                // Get the file name without extension for later use
+                uploadedFileName = file.name.split('.')[0];
+
+                Papa.parse(file, {
+                    delimiter: ";",
+                    complete: function (results) {
+                        const data = results.data.slice(1);
+                        itemSqftMap = { sheets: {}, laminates: {}, edgeBanding: {} };
+                        processedData = [];
+                        totalSqft = 0;
+                        totalPrice = 0;
+
+                        data.forEach(row => {
+                            if (!row || row.length < 12 || !row[2] || isNaN(row[9]) || isNaN(row[10]) || isNaN(row[11])) {
+                                return;
+                            }
+
+                            // Extract customer name from the 31st column
+                            customerName = row[31]?.trim() || 'Unknown Customer'; // Set default if not available
+
+                            const itemCode1 = row[2].trim();
+                            const itemCode2 = row[3].trim();
+                            const itemCode3 = row[4].trim();
+                            const height = parseFloat(row[9]);
+                            const width = parseFloat(row[10]);
+                            const qty = parseFloat(row[11]);
+
+                            const heightInMeters = height / 1000;
+                            const widthInMeters = width / 1000;
+                            const sqft = (heightInMeters * widthInMeters * qty * 10.764).toFixed(2);
+
+                            if (!itemCode1.startsWith('PRE_LAM_')) {
+                                if (!itemSqftMap.sheets[itemCode1]) {
+                                    itemSqftMap.sheets[itemCode1] = parseFloat(sqft);
+                                } else {
+                                    itemSqftMap.sheets[itemCode1] += parseFloat(sqft);
+                                }
+                            }
+                            if (!itemCode2.startsWith('PRE_LAM_')) {
+                                if (!itemSqftMap.laminates[itemCode2]) {
+                                    itemSqftMap.laminates[itemCode2] = parseFloat(sqft);
+                                } else {
+                                    itemSqftMap.laminates[itemCode2] += parseFloat(sqft);
+                                }
+                            }
+                            if (!itemCode3.startsWith('PRE_LAM_')) {
+                                if (!itemSqftMap.laminates[itemCode3]) {
+                                    itemSqftMap.laminates[itemCode3] += parseFloat(sqft);
+                                } else {
+                                    itemSqftMap.laminates[itemCode3] += parseFloat(sqft);
+                                }
+                            }
+
+                            // Collect Edge Banding data
+                            const edgeItem1 = row[24]?.trim(); // 24th column for item
+                            const edgeItem2 = row[25]?.trim(); // 25th column for item
+                            const edgeItem3 = row[26]?.trim(); // 26th column for item
+                            const edgeItem4 = row[27]?.trim(); // 27th column for item
+
+                            const runningMeter1 = (((parseFloat(row[9]) + 40) / 1000) * qty).toFixed(2); // 9th column
+                            const runningMeter2 = (((parseFloat(row[9]) + 40) / 1000) * qty).toFixed(2); // 9th column
+                            const runningMeter3 = (((parseFloat(row[10]) + 40) / 1000) * qty).toFixed(2); // 10th column
+                            const runningMeter4 = (((parseFloat(row[10]) + 40) / 1000) * qty).toFixed(2); // 10th column
+
+                            // Edge Banding processing
+                            const edgeItems = [
+                                { item: edgeItem1, runningMeter: runningMeter1 },
+                                { item: edgeItem2, runningMeter: runningMeter2 },
+                                { item: edgeItem3, runningMeter: runningMeter3 },
+                                { item: edgeItem4, runningMeter: runningMeter4 },
+                            ];
+
+                            edgeItems.forEach(edgeItem => {
+                                if (edgeItem.item) {
+                                    if (!itemSqftMap.edgeBanding[edgeItem.item]) {
+                                        itemSqftMap.edgeBanding[edgeItem.item] = parseFloat(edgeItem.runningMeter);
+                                    } else {
+                                        itemSqftMap.edgeBanding[edgeItem.item] += parseFloat(edgeItem.runningMeter);
+                                    }
+                                }
+                            });
+
+                            totalSqft += parseFloat(sqft);
+                        });
+
+                        const uniqueSheets = Object.entries(itemSqftMap.sheets).map(([item, sqft]) => ({
+                            item: item,
+                            sqft: sqft.toFixed(2)
+                        }));
+                        const uniqueLaminates = Object.entries(itemSqftMap.laminates).map(([item, sqft]) => ({
+                            item: item,
+                            sqft: sqft.toFixed(2)
+                        }));
+                        const edgeBandingItems = Object.entries(itemSqftMap.edgeBanding).map(([item, runningMeter]) => ({
+                            item: item,
+                            runningMeter: runningMeter.toFixed(2)
+                        }));
+
+                        displayDataWithSubHeadings({ sheets: uniqueSheets, laminates: uniqueLaminates, edgeBanding: edgeBandingItems });
+                        showToast("Data processed and displayed successfully!");
+                    }
+                });
+            } else {
+                showToast("Please upload a CSV file first!", true);
+            }
+        });
+
+        // Add this section in the existing `displayDataWithSubHeadings` function
+        function displayDataWithSubHeadings(itemSqftMap) {
+            const dataDisplay = document.getElementById('dataDisplay');
+            dataDisplay.innerHTML = '';
+            const totalPriceContainer = document.getElementById('totalPriceContainer');
+            totalPriceContainer.innerHTML = '';
+            const totalSqftContainer = document.getElementById('totalSqftContainer');
+            totalSqftContainer.innerHTML = '';
+
+            const table = document.createElement('table');
+            table.className = 'data-table';
+
+            const headerRow = document.createElement('tr');
+            const headers = ['ITEM', 'Sq.Ft/R.Mtr', 'Enter Price'];
+            headers.forEach(headerText => {
+                const header = document.createElement('th');
+                header.textContent = headerText;
+                headerRow.appendChild(header);
+            });
+            table.appendChild(headerRow);
+
+            // Display Sheets
+            if (itemSqftMap.sheets.length > 0) {
+                const sheetHeadingRow = document.createElement('tr');
+                const sheetHeadingCell = document.createElement('th');
+                sheetHeadingCell.colSpan = 3;
+                sheetHeadingCell.textContent = 'Sheets';
+                sheetHeadingCell.className = 'sub-heading';
+                sheetHeadingRow.appendChild(sheetHeadingCell);
+                table.appendChild(sheetHeadingRow);
+
+                itemSqftMap.sheets.forEach((itemData, sheetIndex) => {
+                    const tableRow = document.createElement('tr');
+
+                    const itemCell = document.createElement('td');
+                    itemCell.textContent = itemData.item;
+                    tableRow.appendChild(itemCell);
+
+                    const sqftCell = document.createElement('td');
+                    sqftCell.textContent = itemData.sqft;
+                    tableRow.appendChild(sqftCell);
+
+                    const priceCell = document.createElement('td');
+                    const priceInput = document.createElement('input');
+                    priceInput.type = 'number';
+                    priceInput.placeholder = 'Price per sqft';
+                    priceInput.className = 'price-input';
+                    priceInput.dataset.index = `sheet-${sheetIndex}`;
+                    priceInput.addEventListener('input', updateTotalPrice);
+                    priceCell.appendChild(priceInput);
+                    tableRow.appendChild(priceCell);
+
+                    table.appendChild(tableRow);
+                });
+            }
+
+            // Display Laminates
+            if (itemSqftMap.laminates.length > 0) {
+                const laminateHeadingRow = document.createElement('tr');
+                const laminateHeadingCell = document.createElement('th');
+                laminateHeadingCell.colSpan = 3;
+                laminateHeadingCell.textContent = 'Laminates';
+                laminateHeadingCell.className = 'sub-heading';
+                laminateHeadingRow.appendChild(laminateHeadingCell);
+                table.appendChild(laminateHeadingRow);
+
+                itemSqftMap.laminates.forEach((itemData, laminateIndex) => {
+                    const tableRow = document.createElement('tr');
+
+                    const itemCell = document.createElement('td');
+                    itemCell.textContent = itemData.item;
+                    tableRow.appendChild(itemCell);
+
+                    const sqftCell = document.createElement('td');
+                    sqftCell.textContent = itemData.sqft;
+                    tableRow.appendChild(sqftCell);
+
+                    const priceCell = document.createElement('td');
+                    const priceInput = document.createElement('input');
+                    priceInput.type = 'number';
+                    priceInput.placeholder = 'Price per sqft';
+                    priceInput.className = 'price-input';
+                    priceInput.dataset.index = `laminate-${laminateIndex}`;
+                    priceInput.addEventListener('input', updateTotalPrice);
+                    priceCell.appendChild(priceInput);
+                    tableRow.appendChild(priceCell);
+
+                    table.appendChild(tableRow);
+                });
+            }
+
+            // Display Edge Banding
+            if (itemSqftMap.edgeBanding.length > 0) {
+                const edgeBandingHeadingRow = document.createElement('tr');
+                const edgeBandingHeadingCell = document.createElement('th');
+                edgeBandingHeadingCell.colSpan = 3;
+                edgeBandingHeadingCell.textContent = 'Edge Banding';
+                edgeBandingHeadingCell.className = 'sub-heading';
+                edgeBandingHeadingRow.appendChild(edgeBandingHeadingCell);
+                table.appendChild(edgeBandingHeadingRow);
+
+                itemSqftMap.edgeBanding.forEach((itemData, edgeIndex) => {
+                    const tableRow = document.createElement('tr');
+
+                    const itemCell = document.createElement('td');
+                    itemCell.textContent = itemData.item;
+                    tableRow.appendChild(itemCell);
+
+                    const runningMeterCell = document.createElement('td');
+                    runningMeterCell.textContent = itemData.runningMeter;
+                    tableRow.appendChild(runningMeterCell);
+
+                    const priceCell = document.createElement('td');
+                    const priceInput = document.createElement('input');
+                    priceInput.type = 'number';
+                    priceInput.placeholder = 'Price per meter';
+                    priceInput.className = 'price-input';
+                    priceInput.dataset.index = `edge-${edgeIndex}`;
+                    priceInput.addEventListener('input', updateTotalPrice);
+                    priceCell.appendChild(priceInput);
+                    tableRow.appendChild(priceCell);
+
+                    table.appendChild(tableRow);
+                });
+            }
+
+            dataDisplay.appendChild(table);
+            totalSqftContainer.textContent = `Total Square Feet: ${totalSqft.toFixed(2)}`;
+        }
+
+        // Calculate total price based on price per sqft inputs
+        function updateTotalPrice() {
+            totalPrice = 0;
+            document.querySelectorAll('.price-input').forEach(input => {
+                const price = parseFloat(input.value) || 0;
+                const sqft = parseFloat(input.closest('tr').querySelector('td:nth-child(2)').textContent) || 0;
+                totalPrice += price * sqft;
+            });
+
+            const totalPriceContainer = document.getElementById('totalPriceContainer');
+            totalPriceContainer.innerHTML = `<h3>Total Price: ₹${totalPrice.toFixed(2)}</h3>`;
+        }
+
+        document.getElementById('downloadPdfBtn').addEventListener('click', function () {
+            if (uploadedFileName === '') {
+                showToast("Please upload a CSV file before downloading the PDF!", true);
+                return;
+            }
+
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF('p', 'pt');
+            const logo = new Image();
+            logo.src = 'Src/artech.png';
+
+            logo.onload = () => {
+                // Add logo
+                doc.addImage(logo, 'PNG', doc.internal.pageSize.getWidth() - 260, 15, 230, 70);
+                doc.setFontSize(18);
+                doc.text(`${customerName} Quotation`, 20, 40);
+                let currentY = 60;
+
+                // Function to add items to PDF
+                const addItemsToPdf = (title, items, startY) => {
+                    if (items.length > 0) {
+                        doc.setFontSize(12);
+                        doc.text(title, 20, startY += 20);
+                        startY += 10;
+
+                        const tableRows = items.map((item, index) => {
+                            const pricePerUnit = document.querySelector(`input[data-index='${item.index}']`)?.value || '';
+                            return [index + 1, item.item, item.sqft || item.runningMeter, pricePerUnit];
+                        });
+
+                        const leftMargin = 15; // Set left margin to 10
+                        const rightMargin = 15; // Set right margin to 10
+
+                        doc.autoTable({
+                            head: [['Serial Number', 'Item', 'Sq.Ft / Running Meter', 'Price Per Unit']],
+                            body: tableRows,
+                            startY: startY + 5,
+                            margin: { top: 10, bottom: 15, left: leftMargin, right: rightMargin }, // Set margins
+                            styles: { overflow: 'linebreak', cellWidth: 'wrap' },
+                            width: 'calc(100% - 20px)' // Adjust width to account for left and right margins
+                        });
+
+                        return doc.autoTable.previous.finalY + 0;
+                    }
+                    return startY;
+                };
+
+                // Add sections
+                currentY = addItemsToPdf('Sheets', Object.entries(itemSqftMap.sheets).map(([item, sqft], i) => ({
+                    item,
+                    sqft: sqft.toFixed(2),
+                    index: `sheet-${i}`
+                })), currentY);
+
+                currentY = addItemsToPdf('Laminates', Object.entries(itemSqftMap.laminates).map(([item, sqft], i) => ({
+                    item,
+                    sqft: sqft.toFixed(2),
+                    index: `laminate-${i}`
+                })), currentY);
+
+                currentY = addItemsToPdf('Edge Banding', Object.entries(itemSqftMap.edgeBanding).map(([item, runningMeter], i) => ({
+                    item,
+                    runningMeter: runningMeter.toFixed(2),
+                    index: `edge-${i}`
+                })), currentY);
+
+                // Total section
+                const totalSqftText = `Total Sq.Ft: ${totalSqft.toFixed(2)}`;
+                const totalPriceText = `Total Price: ${totalPrice.toFixed(2)}`;
+                const totalSqftWidth = doc.getTextWidth(totalSqftText);
+                const totalPriceWidth = doc.getTextWidth(totalPriceText);
+                const totalX = (doc.internal.pageSize.getWidth() - totalSqftWidth - totalPriceWidth - 20) / 2;
+
+                doc.text(totalSqftText, totalX, currentY + 30);
+                doc.text(totalPriceText, totalX + totalSqftWidth + 20, currentY + 30);
+
+                // Save the PDF
+                doc.save(`${uploadedFileName}_quotation.pdf`);
+            };
+
+            // Error handling if logo doesn't load
+            logo.onerror = () => {
+                console.error("Failed to load logo image.");
+            };
+        });
+
+        document.getElementById('back').addEventListener('click', function () {
+            window.history.back();
+        });
+        function logout() {
+            localStorage.removeItem('isLoggedIn');
+            window.location.href = 'login.html';
+        }
+    </script>
+</body>
+<footer class="footer">
+&copy; 2024 Artech Furniture | Developed by Jitun Choudhury
+</footer>
+
+</html>
